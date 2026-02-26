@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from typing import Any
 
 from unison_heartbeat.cache import cleanup_artifacts, get_unison_paths
 from unison_heartbeat.health import check_sync_health
@@ -17,8 +18,8 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <key>ProgramArguments</key>
     <array>
         <string>{python_path}</string>
-        <string>-m</string>
-        <string>unison_heartbeat.cli</string>
+        <string>{unison_py}</string>
+        <string>daemon</string>
         <string>{config_path}</string>
     </array>
     <key>WorkingDirectory</key>
@@ -54,59 +55,29 @@ def _get_plist_dest() -> str:
     return os.path.join(home, "Library", "LaunchAgents", f"{LABEL}.plist")
 
 
-def _build_config(
-    unison_log_dir: str,
-    sync_points: list[dict[str, str]],
-    heartbeat_interval: int,
-    max_log_lines: int,
-) -> dict:
-    """
-    Build config dictionary from parameters.
-
-    Args:
-        unison_log_dir: Directory for Unison logs.
-        sync_points: List of sync point configurations.
-        heartbeat_interval: Seconds between health checks.
-        max_log_lines: Maximum log lines before deletion.
-
-    Returns:
-        Configuration dictionary for the daemon.
-    """
-    return {
-        "unison_log_dir": unison_log_dir,
-        "sync_points": sync_points,
-        "heartbeat_interval": heartbeat_interval,
-        "max_log_lines": max_log_lines,
-    }
-
-
-def start(
-    unison_log_dir: str,
-    sync_points: list[dict[str, str]],
-    heartbeat_interval: int,
-    max_log_lines: int,
-) -> None:
+def start(config: dict[str, Any]) -> None:
     """
     Stop any existing sync, then install and load the LaunchAgent.
 
     Args:
-        unison_log_dir: Directory for Unison logs.
-        sync_points: List of sync point configurations.
-        heartbeat_interval: Seconds between health checks.
-        max_log_lines: Maximum log lines before deletion.
+        config: Configuration dictionary with unison_log_dir, sync_points,
+                heartbeat_interval, and max_log_lines.
     """
-    config = _build_config(
-        unison_log_dir, sync_points, heartbeat_interval, max_log_lines
-    )
-    stop(unison_log_dir, sync_points)
+    unison_log_dir = config["unison_log_dir"]
+
+    stop(config)
 
     config_path = _get_config_path()
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     with open(config_path, "w") as f:
         json.dump(config, f)
 
+    unison_py = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "unison.py"
+    )
     plist_content = PLIST_TEMPLATE.format(
         python_path=sys.executable,
+        unison_py=os.path.abspath(unison_py),
         config_path=config_path,
         working_dir=os.path.dirname(config_path),
         unison_log_dir=unison_log_dir,
@@ -130,15 +101,14 @@ def start(
         sys.exit(1)
 
 
-def stop(unison_log_dir: str, sync_points: list[dict[str, str]]) -> None:
+def stop(config: dict[str, Any]) -> None:
     """
     Unload and remove the LaunchAgent and clean up artifacts.
 
     Args:
-        unison_log_dir: Directory for Unison logs.
-        sync_points: List of sync point configurations.
+        config: Configuration dictionary with unison_log_dir and sync_points.
     """
-    config = {"unison_log_dir": unison_log_dir, "sync_points": sync_points}
+    unison_log_dir = config["unison_log_dir"]
 
     dest = _get_plist_dest()
     subprocess.run(["launchctl", "unload", dest], capture_output=True)
@@ -161,15 +131,36 @@ def stop(unison_log_dir: str, sync_points: list[dict[str, str]]) -> None:
     print("LaunchAgent stopped.")
 
 
-def status(unison_log_dir: str, sync_points: list[dict[str, str]]) -> None:
+def _print_launchctl_status() -> tuple[str | None, str | None]:
+    """
+    Query launchctl for the agent's PID and exit status.
+
+    Returns:
+        Tuple of (pid, exit_status), either may be None.
+    """
+    pid = None
+    exit_status = None
+    result = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        if LABEL not in line:
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            pid = parts[0] if parts[0] != "-" else None
+            exit_status = parts[1] if len(parts) > 1 else None
+        break
+    return pid, exit_status
+
+
+def status(config: dict[str, Any]) -> None:
     """
     Show detailed status of the LaunchAgent.
 
     Args:
-        unison_log_dir: Directory for Unison logs.
-        sync_points: List of sync point configurations.
+        config: Configuration dictionary with unison_log_dir and sync_points.
     """
-    config = {"unison_log_dir": unison_log_dir, "sync_points": sync_points}
+    unison_log_dir = config["unison_log_dir"]
+    sync_points = config["sync_points"]
     status_check_timeout = 5
 
     plist_path = _get_plist_dest()
@@ -181,17 +172,7 @@ def status(unison_log_dir: str, sync_points: list[dict[str, str]]) -> None:
         print("Status: not installed")
         return
 
-    result = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
-    pid = None
-    exit_status = None
-    for line in result.stdout.splitlines():
-        if LABEL in line:
-            parts = line.split()
-            if len(parts) >= 2:
-                pid = parts[0] if parts[0] != "-" else None
-                exit_status = parts[1] if len(parts) > 1 else None
-            break
-
+    pid, exit_status = _print_launchctl_status()
     if pid:
         print(f"Status: running (PID: {pid})")
     else:
@@ -210,4 +191,6 @@ def status(unison_log_dir: str, sync_points: list[dict[str, str]]) -> None:
         logfile = os.path.join(unison_log_dir, f"unison-{ssh_name}.log")
         healthy = check_sync_health(sp["local_dir"], logfile, status_check_timeout)
         status_str = "healthy" if healthy else "STUCK"
-        print(f"  {ssh_name}: {sp['local_dir']} <-> {sp['remote_dir']} [{status_str}]")
+        print(
+            f"  {ssh_name}: {sp['local_dir']} <-> {sp['remote_dir']}" f" [{status_str}]"
+        )

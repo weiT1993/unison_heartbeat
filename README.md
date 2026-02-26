@@ -1,8 +1,6 @@
 # Unison Heartbeat
 
-Sync local directories with remote hosts via Unison, with heartbeat-based health detection and auto-start on macOS.
-
-**Run once and done.** Installs a macOS LaunchAgent that starts automatically on login. No need to keep a terminal open or re-run after laptop restarts.
+Sync local directories with remote hosts via Unison, with heartbeat-based health detection. Supports macOS (LaunchAgent daemon) and Linux (foreground mode).
 
 ```mermaid
 flowchart LR
@@ -19,6 +17,7 @@ Unison is great for bidirectional file sync, but long-running Unison processes c
 - **Heartbeat monitoring**: Detects stuck syncs by checking log file activity, not just process status
 - **Auto-restart**: Only restarts the specific sync point that's stuck, leaving healthy ones alone
 - **macOS LaunchAgent**: Runs as a daemon that starts on login and stays running
+- **Linux foreground mode**: Run in tmux/screen, stop with Ctrl+C
 - **Log management**: Deletes large log files while preserving logs otherwise
 
 ## How It Works
@@ -30,7 +29,7 @@ Unison is great for bidirectional file sync, but long-running Unison processes c
 
 ## Prerequisites
 
-- **Unison**: `brew install unison`
+- **Unison**: `brew install unison` (macOS) or `apt install unison` (Linux)
 - **Python 3.9+**
 - **SSH config**: Remote hosts must be configured in `~/.ssh/config` with key-based auth. You should be able to run `ssh <host>` without entering a password. Example:
 
@@ -47,36 +46,31 @@ Host myserver
 pip install -e .
 ```
 
-Create `launch.py`:
+Create a JSON config file (`sync.json`):
 
-```python
-from unison_heartbeat import start, status, stop
-
-LOG_DIR = "/path/to/logs"
-HEARTBEAT_INTERVAL = 60  # seconds between health checks
-MAX_LOG_LINES = 1000     # delete logs exceeding this
-
-SYNC_POINTS = [
-    {"local_dir": "/local/path", "ssh": "host", "remote_dir": "/remote/path"},
-]
-
-if __name__ == "__main__":
-    import sys
-    cmd = sys.argv[1] if len(sys.argv) > 1 else None
-    if cmd == "start":
-        start(LOG_DIR, SYNC_POINTS, HEARTBEAT_INTERVAL, MAX_LOG_LINES)
-    elif cmd == "status":
-        status(LOG_DIR, SYNC_POINTS, HEARTBEAT_INTERVAL)
-    elif cmd == "stop":
-        stop(LOG_DIR, SYNC_POINTS)
+```json
+{
+    "unison_log_dir": "/tmp/unison-logs",
+    "heartbeat_interval": 60,
+    "max_log_lines": 1000,
+    "sync_points": [
+        {"local_dir": "/home/ubuntu/project", "ssh": "devbox", "remote_dir": "/home/ubuntu/project"}
+    ]
+}
 ```
 
-Run:
+Run with `--mode foreground` (blocks, Ctrl+C to stop — use tmux or screen):
 
 ```bash
-python launch.py start   # Install LaunchAgent and start syncing
-python launch.py status  # Check daemon and sync health
-python launch.py stop    # Stop and clean up
+python unison.py --mode foreground start --config sync.json
+python unison.py --mode foreground status --config sync.json
+python unison.py --mode foreground stop --config sync.json
 ```
 
-**Run once and done.** The `start` command installs a macOS LaunchAgent that runs automatically on login. No need to keep a terminal open or re-run after laptop restarts.
+Or `--mode launchagent` on macOS (installs a daemon that persists across login):
+
+```bash
+python unison.py --mode launchagent start --config sync.json
+```
+
+See `sync.example.json` for a config template.

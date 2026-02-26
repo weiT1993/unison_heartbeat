@@ -1,0 +1,12 @@
+{
+    "unison_log_dir": "/tmp/unison-logs",
+    "heartbeat_interval": 60,
+    "max_log_lines": 1000,
+    "sync_points": [
+        {
+            "local_dir": "/home/ubuntu/workspace",
+            "ssh": "devbox",
+            "remote_dir": "/home/ubuntu/workspace"
+        }
+    ]
+}
