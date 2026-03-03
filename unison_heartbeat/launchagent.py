@@ -6,7 +6,8 @@ import subprocess
 import sys
 from typing import Any
 
-from unison_heartbeat.cache import cleanup_artifacts, get_unison_paths
+from unison_heartbeat.cache import (clean_unison_state, cleanup_artifacts,
+                                    get_unison_paths)
 from unison_heartbeat.health import check_sync_health
 
 PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +56,25 @@ def _get_plist_dest() -> str:
     return os.path.join(home, "Library", "LaunchAgents", f"{LABEL}.plist")
 
 
+def _load_saved_config() -> dict[str, Any]:
+    """
+    Load config from the saved location.
+
+    Returns:
+        Parsed configuration dictionary.
+
+    Raises:
+        SystemExit: If saved config does not exist or is unreadable.
+    """
+    config_path = _get_config_path()
+    try:
+        with open(config_path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"No saved config at {config_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def start(config: dict[str, Any]) -> None:
     """
     Stop any existing sync, then install and load the LaunchAgent.
@@ -65,7 +85,7 @@ def start(config: dict[str, Any]) -> None:
     """
     unison_log_dir = config["unison_log_dir"]
 
-    stop(config)
+    stop()
 
     config_path = _get_config_path()
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
@@ -101,15 +121,20 @@ def start(config: dict[str, Any]) -> None:
         sys.exit(1)
 
 
-def stop(config: dict[str, Any]) -> None:
+def force_start(config: dict[str, Any]) -> None:
     """
-    Unload and remove the LaunchAgent and clean up artifacts.
+    Wipe all Unison state locally and on remotes, then start fresh.
 
     Args:
-        config: Configuration dictionary with unison_log_dir and sync_points.
+        config: Configuration dictionary.
     """
-    unison_log_dir = config["unison_log_dir"]
+    stop()
+    clean_unison_state(config)
+    start(config)
 
+
+def stop() -> None:
+    """Unload and remove the LaunchAgent and clean up artifacts."""
     dest = _get_plist_dest()
     subprocess.run(["launchctl", "unload", dest], capture_output=True)
     if os.path.exists(dest):
@@ -118,16 +143,19 @@ def stop(config: dict[str, Any]) -> None:
 
     config_path = _get_config_path()
     if os.path.exists(config_path):
+        config = _load_saved_config()
+        unison_log_dir = config["unison_log_dir"]
+
+        if os.path.isdir(unison_log_dir):
+            for log_file in ["launchd-stdout.log", "launchd-stderr.log"]:
+                log_path = os.path.join(unison_log_dir, log_file)
+                if os.path.exists(log_path):
+                    os.remove(log_path)
+                    print(f"Removed: {log_path}")
+
         os.remove(config_path)
+        cleanup_artifacts(config)
 
-    if os.path.isdir(unison_log_dir):
-        for log_file in ["launchd-stdout.log", "launchd-stderr.log"]:
-            log_path = os.path.join(unison_log_dir, log_file)
-            if os.path.exists(log_path):
-                os.remove(log_path)
-                print(f"Removed: {log_path}")
-
-    cleanup_artifacts(config)
     print("LaunchAgent stopped.")
 
 
@@ -152,13 +180,9 @@ def _print_launchctl_status() -> tuple[str | None, str | None]:
     return pid, exit_status
 
 
-def status(config: dict[str, Any]) -> None:
-    """
-    Show detailed status of the LaunchAgent.
-
-    Args:
-        config: Configuration dictionary with unison_log_dir and sync_points.
-    """
+def status() -> None:
+    """Show detailed status of the LaunchAgent."""
+    config = _load_saved_config()
     unison_log_dir = config["unison_log_dir"]
     sync_points = config["sync_points"]
     status_check_timeout = 5

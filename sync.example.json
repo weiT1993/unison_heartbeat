@@ -2,6 +2,7 @@
     "unison_log_dir": "/tmp/unison-logs",
     "heartbeat_interval": 60,
     "max_log_lines": 1000,
+    "timezone": "America/New_York",
     "sync_points": [
         {
             "local_dir": "/home/ubuntu/workspace",

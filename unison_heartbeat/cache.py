@@ -3,6 +3,7 @@
 import glob
 import os
 import shutil
+import subprocess
 from typing import Any
 
 
@@ -74,6 +75,40 @@ def init_unison(config: dict[str, Any]) -> dict[str, str]:
         "unison_dir": unison_dir,
         "unison_log_dir": unison_log_dir,
     }
+
+
+def clean_unison_state(config: dict[str, Any]) -> None:
+    """
+    Wipe ~/.unison/ locally and on each remote host for a clean slate.
+
+    Removes all Unison archives, locks, profiles, and backups so the
+    next sync does a full reconciliation from scratch.
+
+    Args:
+        config: Configuration dictionary with sync_points.
+    """
+    paths = get_unison_paths(config)
+    unison_dir = paths["unison_dir"]
+
+    if os.path.isdir(unison_dir):
+        shutil.rmtree(unison_dir)
+        print(f"Removed: {unison_dir}")
+
+    seen_hosts: set[str] = set()
+    for sp in config["sync_points"]:
+        ssh_name = sp["ssh"]
+        if ssh_name in seen_hosts:
+            continue
+        seen_hosts.add(ssh_name)
+        result = subprocess.run(
+            ["ssh", ssh_name, "rm -rf ~/.unison"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print(f"Removed ~/.unison on {ssh_name}")
+        else:
+            print(f"Warning: failed on {ssh_name}: {result.stderr}")
 
 
 def cleanup_artifacts(config: dict[str, Any]) -> None:

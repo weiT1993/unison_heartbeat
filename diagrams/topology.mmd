@@ -1,0 +1,4 @@
+flowchart LR
+    Local[Local machine] <-->|Unison + heartbeat| H1[EC2: host-1]
+    Local <-->|Unison + heartbeat| H2[EC2: host-2]
+    Local <-->|Unison + heartbeat| H3[EC2: host-3]

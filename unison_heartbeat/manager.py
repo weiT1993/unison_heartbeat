@@ -99,6 +99,10 @@ def run(config: dict[str, Any]) -> None:
         config: Configuration dictionary with sync_points, unison_log_dir,
                 heartbeat_interval, and max_log_lines.
     """
+    tz = config.get("timezone", "America/New_York")
+    os.environ["TZ"] = tz
+    time.tzset()
+
     heartbeat_interval = config["heartbeat_interval"]
     max_log_lines = config["max_log_lines"]
 

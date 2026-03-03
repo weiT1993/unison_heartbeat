@@ -1,44 +1,23 @@
 # Unison Heartbeat
 
-Sync local directories with remote hosts via Unison, with heartbeat-based health detection. Supports macOS (LaunchAgent daemon) and Linux (foreground mode).
+Bidirectional file sync via Unison with heartbeat-based health detection. Auto-detects platform: macOS (LaunchAgent) or Linux (systemd user service).
 
-```mermaid
-flowchart LR
-    Mac[Local Mac]
-    Mac <--> EC2-1[EC2: host-1]
-    Mac <--> EC2-2[EC2: host-2]
-    Mac <--> EC2-3[EC2: host-3]
-```
+![Sync topology](diagrams/topology.png)
 
 ## What This Does
 
-Unison is great for bidirectional file sync, but long-running Unison processes can silently hang when SSH connections drop or remote hosts become unreachable. This tool wraps Unison with:
+Long-running Unison processes can silently hang when SSH connections drop. This tool wraps Unison with:
 
-- **Heartbeat monitoring**: Detects stuck syncs by checking log file activity, not just process status
-- **Auto-restart**: Only restarts the specific sync point that's stuck, leaving healthy ones alone
-- **macOS LaunchAgent**: Runs as a daemon that starts on login and stays running
-- **Linux foreground mode**: Run in tmux/screen, stop with Ctrl+C
-- **Log management**: Deletes large log files while preserving logs otherwise
-
-## How It Works
-
-1. Runs Unison sync processes for each configured sync point
-2. Periodically checks if each sync is alive by monitoring log file activity
-3. If a sync point is stuck (no log updates), only that sync is restarted
-4. Large log files are deleted automatically; logs are preserved otherwise
+- **Heartbeat monitoring**: Detects stuck syncs by writing a heartbeat file and checking log activity
+- **Auto-restart**: Restarts only the stuck sync point, leaving healthy ones alone
+- **Persistent background service**: LaunchAgent on macOS, systemd user service on Linux
+- **Log management**: Deletes large log files automatically
 
 ## Prerequisites
 
 - **Unison**: `brew install unison` (macOS) or `apt install unison` (Linux)
 - **Python 3.9+**
-- **SSH config**: Remote hosts must be configured in `~/.ssh/config` with key-based auth. You should be able to run `ssh <host>` without entering a password. Example:
-
-```
-Host myserver
-    HostName 192.168.1.100
-    User ubuntu
-    IdentityFile ~/.ssh/id_rsa
-```
+- **SSH config**: Hosts in `~/.ssh/config` with key-based auth (passwordless `ssh <host>`)
 
 ## Usage
 
@@ -46,7 +25,7 @@ Host myserver
 pip install -e .
 ```
 
-Create a JSON config file (`sync.json`):
+Create a config file (see `sync.example.json`):
 
 ```json
 {
@@ -54,23 +33,26 @@ Create a JSON config file (`sync.json`):
     "heartbeat_interval": 60,
     "max_log_lines": 1000,
     "sync_points": [
-        {"local_dir": "/home/ubuntu/project", "ssh": "devbox", "remote_dir": "/home/ubuntu/project"}
+        {"local_dir": "/home/ubuntu/workspace", "ssh": "devbox", "remote_dir": "/home/ubuntu/workspace"}
     ]
 }
 ```
 
-Run with `--mode foreground` (blocks, Ctrl+C to stop — use tmux or screen):
-
 ```bash
-python unison.py --mode foreground start --config sync.json
-python unison.py --mode foreground status --config sync.json
-python unison.py --mode foreground stop --config sync.json
+python unison.py start --config sync.json
+python unison.py status
+python unison.py stop
+python unison.py force_start --config sync.json
 ```
 
-Or `--mode launchagent` on macOS (installs a daemon that persists across login):
+Optional: set `"timezone": "America/New_York"` to control log timestamps (defaults to Eastern Time).
 
-```bash
-python unison.py --mode launchagent start --config sync.json
-```
+Platform is detected automatically. Config is saved to `~/.unison/heartbeat-config.json` on `start`, so `status` and `stop` need no arguments.
 
-See `sync.example.json` for a config template.
+`force_start` wipes `~/.unison/` locally and on every remote host (removing all archives, locks, and profiles), then starts fresh. Use this when sync state is corrupted or you want a full reconciliation from scratch.
+
+## Platform Details
+
+**macOS** — LaunchAgent at `~/Library/LaunchAgents/com.user.unison-sync.plist`. Logs to `<unison_log_dir>/launchd-stdout.log`.
+
+**Linux** — Background daemon with PID file at `~/.unison/unison-sync.pid`. Logs to `~/.unison/unison-sync.log`.
